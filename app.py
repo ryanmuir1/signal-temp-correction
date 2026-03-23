@@ -84,4 +84,128 @@ def prepare_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str, str, st
 
 
 
-def add_traces(fig, data: pd.DataFrame, time_col: str, addr_col: str, current_col: str, temp_col:
+def add_traces(fig, data: pd.DataFrame, time_col: str, addr_col: str, current_col: str, temp_col: str, corrected: bool = False):
+    y_col = "corrected_current" if corrected else current_col
+    title_current = "Corrected CH1 Current (nA)" if corrected else "Original CH1 Current (nA)"
+
+    for addr in data[addr_col].dropna().unique():
+        subset = data[data[addr_col] == addr].sort_values(time_col)
+        fig.add_trace(
+            go.Scatter(
+                x=subset[time_col],
+                y=subset[y_col],
+                mode="lines",
+                name=f"{addr} current",
+                legendgroup=str(addr),
+                hovertemplate=(
+                    "bd_addr=%{fullData.legendgroup}<br>"
+                    "time=%{x}<br>"
+                    f"{title_current}=%{{y:.4f}}<extra></extra>"
+                ),
+            ),
+            secondary_y=False,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=subset[time_col],
+                y=subset[temp_col],
+                mode="lines",
+                name=f"{addr} case temp",
+                legendgroup=str(addr),
+                opacity=0.22,
+                line={"dash": "dot"},
+                hovertemplate=(
+                    "bd_addr=%{fullData.legendgroup}<br>"
+                    "time=%{x}<br>"
+                    "Case temp=%{y:.2f} °C<extra></extra>"
+                ),
+            ),
+            secondary_y=True,
+        )
+
+    fig.update_yaxes(title_text=title_current, secondary_y=False)
+    fig.update_yaxes(title_text="Case Temperature (°C)", secondary_y=True)
+    fig.update_layout(
+        height=520,
+        hovermode="x unified",
+        legend_title_text="Trace",
+        margin={"l": 20, "r": 20, "t": 40, "b": 20},
+    )
+
+
+uploaded_file = st.file_uploader(
+    "Upload sensor data file",
+    type=["csv", "tsv", "txt", "xlsx", "xls"],
+    help="Expected columns include timestamp, bd_addr, current_ch1_nanoamps, and temperature_case_degreecelsius.",
+)
+
+with st.sidebar:
+    st.header("Controls")
+    k_input = st.text_input(
+        "Temperature correction factor, k (per °C)",
+        value="0.03",
+        help="Correction uses: CorrectedCurrent = CH1current × (1 + k × (37 - Tcasing)). Press Enter to update.",
+    )
+    reference_temp = st.number_input(
+        "Reference temperature (°C)",
+        value=37.0,
+        step=0.1,
+    )
+
+if uploaded_file is None:
+    st.info("Upload a file to begin.")
+    st.stop()
+
+try:
+    raw_df = load_file(uploaded_file)
+    df, time_col, addr_col, current_col, temp_col = prepare_dataframe(raw_df)
+except Exception as e:
+    st.error(f"Could not read file: {e}")
+    st.stop()
+
+try:
+    k = float(k_input)
+except ValueError:
+    st.error("k must be a valid number, for example 0.03")
+    st.stop()
+
+all_addresses = sorted(df[addr_col].dropna().unique().tolist())
+default_addresses = all_addresses[: min(8, len(all_addresses))]
+
+selected_addresses = st.multiselect(
+    "Select Bluetooth addresses",
+    options=all_addresses,
+    default=default_addresses,
+)
+
+if not selected_addresses:
+    st.warning("Select at least one Bluetooth address.")
+    st.stop()
+
+filtered = df[df[addr_col].isin(selected_addresses)].copy()
+filtered["corrected_current"] = filtered[current_col] * (1 + k * (reference_temp - filtered[temp_col]))
+
+st.subheader("Summary")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Rows in selection", f"{len(filtered):,}")
+col2.metric("Bluetooth addresses", len(selected_addresses))
+col3.metric("k", f"{k:g}")
+col4.metric("Reference temperature", f"{reference_temp:.1f} °C")
+
+left, right = st.columns(2)
+
+with left:
+    st.markdown("#### Original data")
+    fig_original = make_subplots(specs=[[{"secondary_y": True}]])
+    add_traces(fig_original, filtered, time_col, addr_col, current_col, temp_col, corrected=False)
+    st.plotly_chart(fig_original, use_container_width=True)
+
+with right:
+    st.markdown("#### Temperature-corrected data")
+    fig_corrected = make_subplots(specs=[[{"secondary_y": True}]])
+    add_traces(fig_corrected, filtered, time_col, addr_col, current_col, temp_col, corrected=True)
+    st.plotly_chart(fig_corrected, use_container_width=True)
+
+with st.expander("Preview filtered data"):
+    preview_cols = [time_col, addr_col, current_col, temp_col, "corrected_current"]
+    st.dataframe(filtered[preview_cols], use_container_width=True, height=350)
