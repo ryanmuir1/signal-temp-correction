@@ -14,6 +14,9 @@ st.caption("Upload a sensor data file, filter by Bluetooth address, and compare 
 CURRENT_COL_CANDIDATES = [
     "current_ch1_nanoamps",
 ]
+FULLCELL_COL_CANDIDATES = [
+    "fullcell_ch1_millivolts",
+]
 TEMP_COL_CANDIDATES = [
     "temperature_case_degreecelsius",
 ]
@@ -42,14 +45,17 @@ def prepare_dataframe(df: pd.DataFrame):
     time_col = find_column(df, TIME_COL_CANDIDATES)
     addr_col = find_column(df, ADDR_COL_CANDIDATES)
     current_col = find_column(df, CURRENT_COL_CANDIDATES)
+    fullcell_col = find_column(df, FULLCELL_COL_CANDIDATES)
     temp_col = find_column(df, TEMP_COL_CANDIDATES)
 
     out = df.copy()
     out[time_col] = pd.to_datetime(out[time_col], utc=True)
     out[current_col] = pd.to_numeric(out[current_col])
+    if fullcell_col:
+        out[fullcell_col] = pd.to_numeric(out[fullcell_col])
     out[temp_col] = pd.to_numeric(out[temp_col])
 
-    return out, time_col, addr_col, current_col, temp_col
+    return out, time_col, addr_col, current_col, fullcell_col, temp_col
 
 
 def add_traces(fig, data, time_col, addr_col, current_col, temp_col, corrected=False):
@@ -90,7 +96,7 @@ k = st.sidebar.number_input("k (per °C)", value=0.03)
 
 if uploaded_file:
     df = load_file(uploaded_file)
-    df, time_col, addr_col, current_col, temp_col = prepare_dataframe(df)
+    df, time_col, addr_col, current_col, fullcell_col, temp_col = prepare_dataframe(df)
 
     addresses = st.multiselect("bd_addr", df[addr_col].unique(), default=df[addr_col].unique())
     df = df[df[addr_col].isin(addresses)]
@@ -108,3 +114,24 @@ if uploaded_file:
         fig2 = make_subplots(specs=[[{"secondary_y": True}]])
         add_traces(fig2, df, time_col, addr_col, current_col, temp_col, corrected=True)
         st.plotly_chart(fig2, use_container_width=True)
+
+    # --- Fullcell voltage plot ---
+    if fullcell_col:
+        st.markdown("### Fullcell CH1 Voltage (mV)")
+        fig3 = go.Figure()
+        for addr in df[addr_col].unique():
+            subset = df[df[addr_col] == addr]
+            fig3.add_trace(
+                go.Scatter(
+                    x=subset[time_col],
+                    y=subset[fullcell_col],
+                    mode="lines",
+                    name=str(addr),
+                )
+            )
+        fig3.update_layout(
+            yaxis_title="Fullcell CH1 (mV)",
+            xaxis_title="Time",
+            height=400,
+        )
+        st.plotly_chart(fig3, use_container_width=True)
